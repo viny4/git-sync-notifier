@@ -1,0 +1,92 @@
+{
+  "name": "git-sync-notifier",
+  "displayName": "Git Upstream Sync Notifier",
+  "description": "Notifies you when your branch falls behind the default upstream branch, and merges only when you ask.",
+  "version": "0.1.2",
+  "publisher": "viny4",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#2D3B8F",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/viny4/git-sync-notifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/viny4/git-sync-notifier/issues"
+  },
+  "homepage": "https://github.com/viny4/git-sync-notifier#readme",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "merge",
+    "upstream",
+    "notification"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitSyncNotifier.checkNow",
+        "title": "Check Upstream Now",
+        "category": "Git Sync Notifier"
+      },
+      {
+        "command": "gitSyncNotifier.showLog",
+        "title": "Show Log",
+        "category": "Git Sync Notifier"
+      }
+    ],
+    "configuration": {
+      "title": "Git Upstream Sync Notifier",
+      "properties": {
+        "gitSyncNotifier.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable background checks for upstream commits. Disabling also hides the status bar item."
+        },
+        "gitSyncNotifier.pollIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "How often (in minutes) to fetch from origin and compare against the default branch. Minimum 1 minute."
+        },
+        "gitSyncNotifier.remote": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Remote to compare against, e.g. `upstream` for a fork. Leave empty to auto-detect: an `upstream` remote is preferred (the repository your fork came from), otherwise `origin`."
+        },
+        "gitSyncNotifier.remoteBranch": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Branch on `origin` to compare against, e.g. `main` or `release/2.x`. Leave empty to auto-detect from `origin/HEAD`, falling back to `main` then `master`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.5.4"
+  }
+}
