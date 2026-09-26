@@ -4,6 +4,10 @@
   "description": "Notifies you when your branch falls behind the default upstream branch, and merges only when you ask.",
   "version": "0.1.2",
   "publisher": "viny4",
+  "author": {
+    "name": "viny",
+    "url": "https://github.com/viny4"
+  },
   "license": "MIT",
   "icon": "media/icon.png",
   "galleryBanner": {
