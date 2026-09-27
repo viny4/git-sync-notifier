@@ -97,7 +97,8 @@ reused, only superseded. Mistakes are fixed by publishing the next patch.
 
 ```bash
 npm install
-npm run watch     # leave running
+npm run watch     # leave running — esbuild, rebuilds on save
+npm run typecheck # esbuild does not type check; tsc does
 ```
 
 Press F5 (Run → Start Debugging) for the Extension Development Host, or install
@@ -147,11 +148,7 @@ remote.
 
 Roughly in order of value per unit of work:
 
-1. **Bundle with esbuild.** Ships one file instead of `node_modules`, cutting
-   package size and activation time. `npm i -D esbuild`, add an
-   `esbuild.js`, point `main` at `dist/extension.js`, and add `dist/**` to the
-   packaged files while ignoring `out/**`.
-2. **Watch every repo in a multi-root workspace,** not just the first one. Needs
+1. **Watch every repo in a multi-root workspace,** not just the first one. Needs
    one controller per repo and a status bar item that follows the active editor.
 3. **Snooze instead of only Dismiss** — "remind me in an hour".
 4. **Offer rebase as well as merge**, for teams with a linear-history rule.
