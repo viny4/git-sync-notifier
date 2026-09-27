@@ -7,30 +7,16 @@ background.
 
 ## What it does
 
-- Fetches on an interval and when the window regains focus (throttled so the two
-  do not double-fire).
-- **Fork-aware**: if a remote named `upstream` exists, that is what you are
-  compared against — in a fork, `origin` is your own copy and the parent
-  repository is the one you need to keep up with. Otherwise `origin` is used.
-- Compares `HEAD` against `<remote>/<default-branch>` with
-  `git rev-list --left-right --count`, so it knows both how far behind and how
-  far ahead you are, plus how many commits you have not pushed to your own fork.
-- Names the people who pushed, and shows the latest commit subject:
-  `3 new commits on upstream/main from Alice and 1 other — latest: "refactor
-  request handler" (12 minutes ago). Merge into feature?` with **Merge Now**,
-  **Details**, and **Dismiss**.
-- Warns about conflict risk *before* you merge: `⚠️ 1 file overlap with your
-  changes` means an incoming commit touches a file your branch also changed.
-- **Details** lists every incoming commit (subject · author · when · short SHA)
-  and returns you to the prompt, so reviewing does not cost you the merge button.
-- Status bar item on the left: `↓3 ↑2` when behind and ahead, `$(check) In sync`
-  otherwise. Hovering shows the counts, the unpushed count, the overlapping
-  files, and the five newest incoming commits. Click it to check immediately.
-- On conflicts it never tries to resolve anything: it opens VS Code's 3-way
-  merge editor on the first conflicted file and reveals the Source Control view.
-- Distinguishes "merged", "already up to date", and "conflicts — resolve
-  manually", and reports network failures, a missing `origin`, a detached HEAD,
-  and uncommitted changes that block a merge as distinct messages.
+- **Never merges on its own.** Every merge happens because you clicked a button.
+- **Fork-aware.** If a remote named `upstream` exists, that is what you are compared against — in a fork, `origin` is your own copy and the parent repository is the one you need to keep up with.
+- **Tells you who pushed.** *3 new commits on upstream/main from Alice and 1 other — latest: "refactor request handler" (12 minutes ago). Merge into feature?*
+- **Warns about conflict risk before you merge.** ⚠️ *1 file overlap with your changes* means an incoming commit touches a file your branch also changed.
+- **Details button** lists every incoming commit — subject, author, when, short SHA — and returns you to the prompt, so reviewing does not cost you the merge.
+- **Three counts, not one.** Behind, ahead, and how many commits you have not pushed to your own fork yet.
+- **Status bar** shows `↓3 ↑2`, or `In sync`. Hover for the full breakdown and the newest incoming commits. Click to check on demand.
+- **Conflicts go to VS Code's own merge editor.** Nothing is ever resolved programmatically.
+- **Does not spam you.** One alert per new commit range, and errors are deduplicated so a flaky network stays quiet.
+- Fetches on a configurable interval and when the window regains focus, throttled so the two do not double-fire.
 
 ## Install
 
