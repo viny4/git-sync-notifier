@@ -6,6 +6,15 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-09-27
+
+### Changed
+
+- README feature list rewritten so it renders as a list on the Marketplace,
+  which does not handle list items wrapped across lines.
+- Development files (`.github/`, `PUBLISHING.md`, `media/icon.svg`) are no
+  longer included in the published package.
+
 ## [0.1.2] — 2026-09-27
 
 ### Fixed
