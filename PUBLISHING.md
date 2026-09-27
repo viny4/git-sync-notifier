@@ -148,16 +148,19 @@ remote.
 
 Roughly in order of value per unit of work:
 
-1. **Watch every repo in a multi-root workspace,** not just the first one. Needs
-   one controller per repo and a status bar item that follows the active editor.
-3. **Snooze instead of only Dismiss** — "remind me in an hour".
-4. **Offer rebase as well as merge**, for teams with a linear-history rule.
-5. **Sync the fork's default branch**, the other classic fork chore:
+1. **Automated tests in CI**, which becomes urgent as soon as anyone else
+   contributes. The throwaway-repo harnesses already cover forks, conflicts,
+   parent-branch resolution and multi-repo workspaces — they just are not in
+   the repository yet.
+2. **Snooze instead of only Dismiss** — "remind me in an hour".
+3. **Offer rebase as well as merge**, for teams with a linear-history rule.
+4. **Sync the fork's default branch**, the other classic fork chore:
    `git fetch upstream && git push origin upstream/main:main`.
-6. **Optional GitHub enrichment** — PR number, CI status, avatars. Needs a token
+5. **Optional GitHub enrichment** — PR number, CI status, avatars. Needs a token
    and network, so it must be opt-in and degrade silently.
-7. **Automated tests in CI** (see above), which becomes urgent as soon as anyone
-   else contributes.
+6. **Per-repository settings for multi-repo workspaces** — today `enabled` and
+   the interval are read per workspace folder, which covers most of it, but a
+   repo found *below* a workspace folder inherits that folder's settings.
 
 ## Things to be careful about
 

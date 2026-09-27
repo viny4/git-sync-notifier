@@ -1,15 +1,7 @@
 import * as vscode from 'vscode';
 import { Logger } from './logger';
 import { summarizeAuthors, SyncStatus } from './gitService';
-
-export type StatusView =
-  | { kind: 'hidden' }
-  | { kind: 'checking' }
-  | { kind: 'synced'; status: SyncStatus }
-  | { kind: 'behind'; status: SyncStatus }
-  | { kind: 'conflict' }
-  | { kind: 'merging'; conflicted: number }
-  | { kind: 'error'; message: string };
+import { StatusBar, StatusView } from './statusBar';
 
 export type BehindChoice = 'merge' | 'details' | 'dismiss' | 'ignored';
 
@@ -24,84 +16,30 @@ function plural(count: number, word: string): string {
 }
 
 export class Notifier implements vscode.Disposable {
-  private readonly statusBar: vscode.StatusBarItem;
+  constructor(
+    private readonly logger: Logger,
+    private readonly statusBar: StatusBar,
+    private readonly repoRoot: string,
+    /** Repository name, shown in toasts when more than one is watched. */
+    private readonly label: string,
+    private readonly isMultiRepo: () => boolean
+  ) {
+    this.statusBar.track(repoRoot, label);
+  }
 
-  constructor(private readonly logger: Logger) {
-    this.statusBar = vscode.window.createStatusBarItem(
-      'gitSyncNotifier.status',
-      vscode.StatusBarAlignment.Left,
-      -1
-    );
-    this.statusBar.name = 'Git Sync Notifier';
-    this.statusBar.command = 'gitSyncNotifier.checkNow';
+  /** Prefixes messages with the repository name when several are watched. */
+  private scoped(message: string): string {
+    return this.isMultiRepo() ? `${this.label}: ${message}` : message;
   }
 
   setStatus(view: StatusView): void {
-    switch (view.kind) {
-      case 'hidden':
-        this.statusBar.hide();
-        return;
-
-      case 'checking':
-        this.statusBar.text = '$(sync~spin) Checking upstream';
-        this.statusBar.tooltip = 'Fetching…';
-        this.statusBar.backgroundColor = undefined;
-        break;
-
-      case 'synced':
-        this.statusBar.text = `$(check) In sync${aheadSuffix(view.status)}`;
-        this.statusBar.tooltip = buildTooltip(view.status);
-        this.statusBar.backgroundColor = undefined;
-        break;
-
-      case 'behind':
-        this.statusBar.text = `$(cloud-download) ↓${view.status.behind}${aheadSuffix(view.status)}`;
-        this.statusBar.tooltip = buildTooltip(view.status);
-        this.statusBar.backgroundColor = new vscode.ThemeColor(
-          'statusBarItem.warningBackground'
-        );
-        break;
-
-      case 'merging':
-        this.statusBar.text =
-          view.conflicted > 0
-            ? `$(warning) ${plural(view.conflicted, 'conflict')} to resolve`
-            : '$(git-merge) Finish merge';
-        this.statusBar.tooltip =
-          view.conflicted > 0
-            ? 'A merge is in progress with unresolved conflicts. Resolve them, then commit.'
-            : 'A merge is in progress with everything resolved — commit it to finish.';
-        this.statusBar.backgroundColor = new vscode.ThemeColor(
-          view.conflicted > 0
-            ? 'statusBarItem.errorBackground'
-            : 'statusBarItem.warningBackground'
-        );
-        break;
-
-      case 'conflict':
-        this.statusBar.text = '$(warning) Merge conflicts';
-        this.statusBar.tooltip = 'Resolve the conflicts in the Source Control view.';
-        this.statusBar.backgroundColor = new vscode.ThemeColor(
-          'statusBarItem.errorBackground'
-        );
-        break;
-
-      case 'error':
-        this.statusBar.text = '$(error) Upstream check failed';
-        this.statusBar.tooltip = `${view.message} Click to retry.`;
-        this.statusBar.backgroundColor = new vscode.ThemeColor(
-          'statusBarItem.warningBackground'
-        );
-        break;
-    }
-
-    this.statusBar.show();
+    this.statusBar.set(this.repoRoot, view);
   }
 
   /** The one notification this extension exists for. Never merges by itself. */
   async promptBehind(status: SyncStatus): Promise<BehindChoice> {
     const choice = await vscode.window.showInformationMessage(
-      describeIncoming(status),
+      this.scoped(describeIncoming(status)),
       MERGE_NOW,
       DETAILS,
       DISMISS
@@ -154,10 +92,11 @@ export class Notifier implements vscode.Disposable {
     conflicted: string[],
     absolutePath: (file: string) => string
   ): Promise<void> {
-    const message =
+    const message = this.scoped(
       conflicted.length > 0
         ? `A merge is in progress with ${plural(conflicted.length, 'unresolved conflict')}. Resolve them, then commit.`
-        : 'A merge is in progress and everything is resolved — commit it to finish.';
+        : 'A merge is in progress and everything is resolved — commit it to finish.'
+    );
 
     const action = conflicted.length > 0 ? SHOW_CONFLICTS : 'Open Source Control';
     const choice = await vscode.window.showWarningMessage(message, action);
@@ -170,7 +109,9 @@ export class Notifier implements vscode.Disposable {
 
   showMergeSucceeded(status: SyncStatus): void {
     void vscode.window.showInformationMessage(
-      `Merged ${plural(status.behind, 'commit')} from ${status.remote.name}/${status.remoteBranch} into ${status.localBranch}.`
+      this.scoped(
+        `Merged ${plural(status.behind, 'commit')} from ${status.remote.name}/${status.remoteBranch} into ${status.localBranch}.`
+      )
     );
   }
 
@@ -180,7 +121,9 @@ export class Notifier implements vscode.Disposable {
         ? ` You have ${plural(status.unpushed, 'commit')} not pushed to ${status.pushTarget}.`
         : '';
     void vscode.window.showInformationMessage(
-      `${status.localBranch} is up to date with ${status.remote.name}/${status.remoteBranch}.${unpushed}`
+      this.scoped(
+        `${status.localBranch} is up to date with ${status.remote.name}/${status.remoteBranch}.${unpushed}`
+      )
     );
   }
 
@@ -199,7 +142,9 @@ export class Notifier implements vscode.Disposable {
 
     void vscode.window
       .showWarningMessage(
-        `Merge stopped with conflicts in ${files.length || 'some'} file(s)${list}. Resolve them, then commit.`,
+        this.scoped(
+          `Merge stopped with conflicts in ${files.length || 'some'} file(s)${list}. Resolve them, then commit.`
+        ),
         SHOW_CONFLICTS
       )
       .then((choice) => {
@@ -241,7 +186,7 @@ export class Notifier implements vscode.Disposable {
 
   showError(message: string, detail?: string): void {
     void vscode.window
-      .showWarningMessage(`Git Sync Notifier: ${message}`, SHOW_LOG)
+      .showWarningMessage(this.scoped(`Git Sync Notifier: ${message}`), SHOW_LOG)
       .then((choice) => {
         if (choice === SHOW_LOG) {
           this.logger.show();
@@ -253,13 +198,10 @@ export class Notifier implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.statusBar.dispose();
+    this.statusBar.forget(this.repoRoot);
   }
 }
 
-function aheadSuffix(status: SyncStatus): string {
-  return status.ahead > 0 ? ` ↑${status.ahead}` : '';
-}
 
 /**
  * "3 new commits on upstream/main from Teammate and 1 other — latest:
@@ -284,46 +226,3 @@ export function describeIncoming(status: SyncStatus): string {
   return message;
 }
 
-function buildTooltip(status: SyncStatus): vscode.MarkdownString {
-  const ref = `${status.remote.name}/${status.remoteBranch}`;
-  const md = new vscode.MarkdownString(undefined, true);
-  md.supportHtml = false;
-
-  const where = status.remote.slug ? ` (\`${status.remote.slug}\`)` : '';
-  md.appendMarkdown(`**${status.localBranch}** vs \`${ref}\`${where}\n\n`);
-
-  md.appendMarkdown(
-    status.behind > 0
-      ? `- $(cloud-download) Behind by **${status.behind}** — ${plural(status.incomingFileCount, 'file')} changed\n`
-      : '- $(check) Up to date\n'
-  );
-  if (status.ahead > 0) {
-    md.appendMarkdown(`- $(git-commit) Ahead by **${status.ahead}** of \`${ref}\`\n`);
-  }
-  if (status.unpushed !== undefined && status.unpushed > 0) {
-    md.appendMarkdown(
-      `- $(cloud-upload) **${status.unpushed}** not pushed to \`${status.pushTarget}\`\n`
-    );
-  }
-  if (status.overlapFiles.length > 0) {
-    md.appendMarkdown(
-      `- $(warning) ${plural(status.overlapFiles.length, 'file')} also changed here: ${status.overlapFiles
-        .slice(0, 5)
-        .map((file) => `\`${file}\``)
-        .join(', ')}\n`
-    );
-  }
-
-  if (status.commits.length > 0) {
-    md.appendMarkdown('\n**Incoming**\n\n');
-    for (const commit of status.commits.slice(0, 5)) {
-      md.appendMarkdown(`- ${commit.subject} — *${commit.author}, ${commit.relativeTime}*\n`);
-    }
-    if (status.behind > 5) {
-      md.appendMarkdown(`- …and ${status.behind - 5} more\n`);
-    }
-  }
-
-  md.appendMarkdown('\nClick to check again.');
-  return md;
-}

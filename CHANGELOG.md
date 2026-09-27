@@ -6,6 +6,30 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-09-27
+
+### Added
+
+- Watches **every** repository in the workspace instead of only the first.
+  Each one is checked, notified about and merged independently, and toasts are
+  prefixed with the repository name when more than one is watched.
+- Repositories are found one level below a workspace folder as well as at the
+  folder itself. Keeping `frontend/`, `backend/`, `serverless/` and `packages/`
+  side by side and opening the parent folder now works — previously the
+  extension stayed dormant, because the parent folder is not itself a
+  repository.
+- The status bar follows the file you are editing, showing that repository's
+  state. With no matching file open it summarises instead: `↓6 in 3 repos`,
+  or `4 repos in sync`. The tooltip lists every repository. With a single
+  repository nothing changes.
+
+### Changed
+
+- First checks are staggered so several repositories do not all fetch at the
+  same instant during startup.
+- `node_modules`, `dist`, `build`, `.venv` and similar folders are skipped when
+  looking for repositories, and at most 12 are watched.
+
 ## [0.1.5] — 2026-09-27
 
 ### Fixed

@@ -14,7 +14,8 @@ background.
 - **Warns about conflict risk before you merge.** ⚠️ *1 file overlap with your changes* means an incoming commit touches a file your branch also changed.
 - **Details button** lists every incoming commit — subject, author, when, short SHA — and returns you to the prompt, so reviewing does not cost you the merge.
 - **Three counts, not one.** Behind, ahead, and how many commits you have not pushed to your own fork yet.
-- **Status bar** shows `↓3 ↑2`, or `In sync`. Hover for the full breakdown and the newest incoming commits. Click to check on demand.
+- **Status bar** shows `↓3 ↑2`, or `In sync`. With several repositories open it follows the file you are editing, and summarises (`↓6 in 3 repos`) when the active file belongs to none of them. Hover for the full breakdown; click to check on demand.
+- **Watches every repository in the workspace**, each independently — a frontend, a backend, some services, whether opened as a multi-root workspace or as one parent folder holding them all.
 - **Conflicts go to VS Code's own merge editor.** Nothing is ever resolved programmatically.
 - **Does not spam you.** One alert per new commit range, and errors are deduplicated so a flaky network stays quiet.
 - Fetches on a configurable interval and when the window regains focus, throttled so the two do not double-fire.
@@ -75,8 +76,11 @@ only updates the status bar until the error changes or you check manually.
 
 - If no workspace folder is inside a git repository, the extension stays
   dormant: no status bar item, no polling.
-- In a multi-root workspace, the first folder that is inside a git repository is
-  the one watched; the log says which.
+- Every repository in the workspace is watched, including sibling repositories
+  one level below a workspace folder — so opening a parent folder that holds
+  `frontend/`, `backend/` and friends works without a multi-root workspace.
+  `node_modules` and similar build folders are skipped, and at most 12
+  repositories are watched.
 - On a detached HEAD there is no branch to merge into, so checks stop with a
   message rather than guessing.
 - If a merge is already in progress, or the working tree has changes that the
@@ -87,9 +91,10 @@ only updates the status bar until the error changes or you check manually.
 
 ```
 src/
-├── extension.ts    # activation, polling/focus triggers, orchestration
+├── extension.ts    # activation, repository discovery, polling/focus triggers
 ├── gitService.ts   # every git call (fetch, rev-list, merge, branch detection)
-├── notifier.ts     # notifications, status bar, routing to the merge editor
+├── notifier.ts     # notifications and routing to the merge editor
+├── statusBar.ts    # the one status bar item, shared across repositories
 ├── config.ts       # workspace settings
 ├── state.ts        # workspaceState: which commit ranges were dismissed
 └── logger.ts       # "Git Sync Notifier" output channel

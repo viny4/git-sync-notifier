@@ -1,14 +1,18 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { affectsConfig, getConfig } from './config';
 import { GitService, GitServiceError, SyncStatus } from './gitService';
 import { Logger } from './logger';
 import { Notifier } from './notifier';
+import { StatusBar } from './statusBar';
 import { NotificationState, RangeSignature } from './state';
 
 /** Refocusing the window more often than this does not trigger a new fetch. */
 const FOCUS_THROTTLE_MS = 60_000;
 /** Small delay after activation so we do not compete with startup work. */
 const STARTUP_DELAY_MS = 2_000;
+/** Spacing between each repository's first check. */
+const STARTUP_STAGGER_MS = 1_500;
 
 class SyncController implements vscode.Disposable {
   private timer: NodeJS.Timeout | undefined;
@@ -18,19 +22,25 @@ class SyncController implements vscode.Disposable {
   private disposed = false;
 
   constructor(
-    private readonly git: GitService,
+    readonly git: GitService,
     private readonly notifier: Notifier,
     private readonly state: NotificationState,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    /** Repository name, used to keep log lines apart when several are watched. */
+    readonly label: string
   ) {}
 
-  start(): void {
+  /**
+   * `startupDelayMs` staggers the first check: four repositories fetching in
+   * the same instant would make the editor feel slow at startup.
+   */
+  start(startupDelayMs = STARTUP_DELAY_MS): void {
     this.applyConfig();
     setTimeout(() => {
       if (!this.disposed) {
         void this.check({ manual: false });
       }
-    }, STARTUP_DELAY_MS);
+    }, startupDelayMs);
   }
 
   /** (Re)reads settings: resets the poll timer and hides the UI when disabled. */
@@ -40,7 +50,7 @@ class SyncController implements vscode.Disposable {
     const config = getConfig(vscode.Uri.file(this.git.repoRoot));
     if (!config.enabled) {
       this.logger.info('Disabled via gitSyncNotifier.enabled.');
-      this.notifier.setStatus({ kind: 'hidden' });
+      this.notifier.setStatus({ kind: 'idle' });
       return;
     }
 
@@ -48,7 +58,9 @@ class SyncController implements vscode.Disposable {
     this.timer = setInterval(() => {
       void this.check({ manual: false });
     }, intervalMs);
-    this.logger.info(`Polling every ${config.pollIntervalMinutes} minute(s).`);
+    this.logger.info(
+      `[${this.label}] polling every ${config.pollIntervalMinutes} minute(s).`
+    );
   }
 
   onWindowFocus(): void {
@@ -82,7 +94,7 @@ class SyncController implements vscode.Disposable {
   private async runCheck(options: { manual: boolean }): Promise<void> {
     const config = getConfig(vscode.Uri.file(this.git.repoRoot));
     if (!config.enabled) {
-      this.notifier.setStatus({ kind: 'hidden' });
+      this.notifier.setStatus({ kind: 'idle' });
       return;
     }
 
@@ -295,78 +307,169 @@ function signatureOf(status: SyncStatus): RangeSignature {
   };
 }
 
-async function findRepository(logger: Logger): Promise<GitService | undefined> {
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  for (const folder of folders) {
-    if (folder.uri.scheme !== 'file') {
+/** Folders that never contain a repository worth watching. */
+const SKIP_DIRECTORIES = new Set([
+  'node_modules', 'dist', 'out', 'build', 'target', 'vendor', '.venv', 'venv',
+  '__pycache__', '.next', '.nuxt', 'coverage', 'tmp', '.cache'
+]);
+/** Guards against a workspace folder full of repositories. */
+const MAX_REPOSITORIES = 12;
+
+/**
+ * Every repository in the workspace, not just the first.
+ *
+ * Two layouts matter. A multi-root workspace has one folder per repository.
+ * But people also keep `frontend/`, `backend/`, `serverless/` and `packages/`
+ * side by side and open the *parent* folder — which is not itself a
+ * repository, so a naive check finds nothing at all. Both are handled by
+ * looking one level down when a folder is not a repository itself.
+ */
+async function findRepositories(logger: Logger): Promise<GitService[]> {
+  const found = new Map<string, GitService>();
+
+  const consider = async (folder: string): Promise<boolean> => {
+    const git = await GitService.open(folder);
+    if (git && !found.has(git.repoRoot)) {
+      found.set(git.repoRoot, git);
+    }
+    return Boolean(git);
+  };
+
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme !== 'file' || found.size >= MAX_REPOSITORIES) {
       continue;
     }
-    const git = await GitService.open(folder.uri.fsPath);
-    if (git) {
-      logger.info(`Watching repository ${git.repoRoot}`);
-      return git;
+
+    if (await consider(folder.uri.fsPath)) {
+      continue;
+    }
+
+    // Not a repository itself — look at its immediate children.
+    let children: [string, vscode.FileType][] = [];
+    try {
+      children = await vscode.workspace.fs.readDirectory(folder.uri);
+    } catch (error) {
+      logger.error(`Could not read ${folder.uri.fsPath}`, error);
+      continue;
+    }
+
+    for (const [name, type] of children) {
+      if (
+        type !== vscode.FileType.Directory ||
+        name.startsWith('.') ||
+        SKIP_DIRECTORIES.has(name) ||
+        found.size >= MAX_REPOSITORIES
+      ) {
+        continue;
+      }
+      await consider(vscode.Uri.joinPath(folder.uri, name).fsPath);
     }
   }
-  return undefined;
+
+  return [...found.values()];
+}
+
+function labelFor(repoRoot: string): string {
+  return path.basename(repoRoot) || repoRoot;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const logger = new Logger();
-  const notifier = new Notifier(logger);
+  const statusBar = new StatusBar();
   const state = new NotificationState(context.workspaceState);
-  context.subscriptions.push(logger, notifier);
+  context.subscriptions.push(logger, statusBar);
 
-  let controller: SyncController | undefined;
+  let controllers: SyncController[] = [];
+  const isMultiRepo = () => controllers.length > 1;
+
+  /** The repository containing the file being edited, if any. */
+  const followActiveEditor = (): void => {
+    const file = vscode.window.activeTextEditor?.document.uri;
+    if (!file || file.scheme !== 'file') {
+      statusBar.setActiveRepo(undefined);
+      return;
+    }
+    // Longest matching root wins, so a repo nested inside another still works.
+    const match = controllers
+      .filter((controller) => file.fsPath.startsWith(controller.git.repoRoot))
+      .sort((a, b) => b.git.repoRoot.length - a.git.repoRoot.length)[0];
+    statusBar.setActiveRepo(match?.git.repoRoot);
+  };
 
   const initialise = async (): Promise<void> => {
-    controller?.dispose();
-    controller = undefined;
+    for (const controller of controllers) {
+      controller.dispose();
+    }
+    controllers = [];
+    statusBar.clear();
 
-    const git = await findRepository(logger);
-    if (!git) {
+    const repositories = await findRepositories(logger);
+    if (repositories.length === 0) {
       logger.info('No git repository in this workspace — staying dormant.');
-      notifier.setStatus({ kind: 'hidden' });
       return;
     }
 
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    if (folders.length > 1) {
-      logger.warn(
-        `Multi-root workspace: only ${git.repoRoot} is watched by this extension.`
-      );
-    }
+    logger.info(
+      repositories.length === 1
+        ? `Watching repository ${repositories[0]!.repoRoot}`
+        : `Watching ${repositories.length} repositories: ${repositories
+            .map((git) => git.repoRoot)
+            .join(', ')}`
+    );
 
-    controller = new SyncController(git, notifier, state, logger);
-    controller.start();
+    controllers = repositories.map((git) => {
+      const label = labelFor(git.repoRoot);
+      const notifier = new Notifier(logger, statusBar, git.repoRoot, label, isMultiRepo);
+      return new SyncController(git, notifier, state, logger, label);
+    });
+
+    controllers.forEach((controller, index) => {
+      // Stagger the first check so several repositories do not all fetch at once.
+      controller.start(STARTUP_DELAY_MS + index * STARTUP_STAGGER_MS);
+    });
+    followActiveEditor();
   };
 
   context.subscriptions.push(
     vscode.commands.registerCommand('gitSyncNotifier.checkNow', async () => {
-      if (!controller) {
+      if (controllers.length === 0) {
         await initialise();
       }
-      if (!controller) {
+      if (controllers.length === 0) {
         void vscode.window.showInformationMessage(
           'Git Sync Notifier: no git repository found in this workspace.'
         );
         return;
       }
-      await controller.check({ manual: true });
+      await Promise.all(
+        controllers.map((controller) => controller.check({ manual: true }))
+      );
     }),
     vscode.commands.registerCommand('gitSyncNotifier.showLog', () => logger.show()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (affectsConfig(event)) {
         logger.info('Configuration changed; reloading.');
-        controller?.applyConfig();
+        for (const controller of controllers) {
+          controller.applyConfig();
+        }
       }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => void initialise()),
+    vscode.window.onDidChangeActiveTextEditor(() => followActiveEditor()),
     vscode.window.onDidChangeWindowState((windowState) => {
       if (windowState.focused) {
-        controller?.onWindowFocus();
+        for (const controller of controllers) {
+          controller.onWindowFocus();
+        }
       }
     }),
-    { dispose: () => controller?.dispose() }
+    {
+      dispose: () => {
+        for (const controller of controllers) {
+          controller.dispose();
+        }
+      }
+    }
   );
 
   await initialise();
