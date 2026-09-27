@@ -6,6 +6,8 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-09-27
+
 ### Changed
 
 - Bundled with esbuild. The published package is 55 KB across 8 files instead
