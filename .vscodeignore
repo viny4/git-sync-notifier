@@ -2,12 +2,14 @@
 .vscode-test/**
 .github/**
 src/**
-out/**/*.map
-node_modules/.bin/**
+out/**
+dist/**/*.map
+node_modules/**
+esbuild.js
 .gitignore
 tsconfig.json
 **/*.ts
 PUBLISHING.md
+GUIDE.md
 media/icon.svg
 *.vsix
-GUIDE.md

@@ -121,7 +121,8 @@ identically without it.
 
 ```bash
 cd "/Users/vinayagam/git upstream extension"
-npm run watch          # leave this running; recompiles on save
+npm run watch          # leave this running; rebuilds on save (esbuild)
+npm run typecheck      # esbuild does not type check — run tsc separately
 ```
 
 Press F5 (or Run → Start Debugging) for the Extension Development Host. If F5

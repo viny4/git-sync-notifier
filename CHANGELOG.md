@@ -6,6 +6,12 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Bundled with esbuild. The published package is 55 KB across 8 files instead
+  of 290 KB across 61, since `node_modules` is no longer shipped, and the
+  extension activates faster.
+
 ## [0.1.3] — 2026-09-27
 
 ### Changed
