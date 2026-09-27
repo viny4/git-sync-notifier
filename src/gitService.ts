@@ -7,6 +7,10 @@ export const FALLBACK_REMOTE = 'origin';
 export const PARENT_REMOTE = 'upstream';
 /** Cap on how many incoming commits we read for the details list. */
 const COMMIT_LIST_LIMIT = 25;
+/** Cap on branches considered when inferring which branch you cut from. */
+const PARENT_CANDIDATE_LIMIT = 150;
+/** How many equally-close candidates get an exact ahead/behind measurement. */
+const PARENT_SHORTLIST_LIMIT = 10;
 const FIELD_SEPARATOR = '\x1f';
 
 export type GitErrorCode =
@@ -283,6 +287,272 @@ export class GitService {
       'missing-remote-branch',
       `Could not determine the default branch on ${remote}. Set gitSyncNotifier.remoteBranch to choose one explicitly.`
     );
+  }
+
+  /**
+   * The branch this one was created from, when something actually recorded it.
+   *
+   * Two sources, both exact, no guessing:
+   *  - `branch.<name>.vscode-merge-base`, which VS Code's own git extension
+   *    writes and keeps up to date;
+   *  - the reflog entry `branch: Created from <name>` that git writes when the
+   *    branch is created.
+   *
+   * The reflog is local and expires (90 days by default), and neither exists
+   * for a branch that arrived with a fresh clone — hence the fallback in
+   * `detectParentBranch`.
+   */
+  async readRecordedParent(
+    remote: string,
+    localBranch: string
+  ): Promise<{ branch: string; source: string } | undefined> {
+    const fromConfig = await this.configValue(
+      `branch.${localBranch}.vscode-merge-base`
+    );
+    const configBranch = this.normaliseBranchRef(fromConfig, remote);
+    if (configBranch && (await this.remoteBranchExists(remote, configBranch))) {
+      return { branch: configBranch, source: 'vscode-merge-base' };
+    }
+
+    try {
+      // `refs/heads/<name>` rather than the bare name: unambiguous when a file
+      // shares the branch's name, and no `--` separator (which git would read
+      // as "everything after this is a path").
+      const reflog = await this.git.raw([
+        'reflog',
+        'show',
+        `refs/heads/${localBranch}`
+      ]);
+      const created = [...reflog.matchAll(/branch: Created from (.+)$/gm)].pop();
+      const name = this.normaliseBranchRef(created?.[1], remote);
+      if (name && name !== 'HEAD' && (await this.remoteBranchExists(remote, name))) {
+        return { branch: name, source: 'reflog' };
+      }
+    } catch {
+      // No reflog for this branch (fresh clone, or it has expired).
+    }
+
+    // `git checkout -b <new>` from the current branch records "Created from
+    // HEAD", which names nothing — but HEAD's own reflog records the move.
+    try {
+      const headReflog = await this.git.raw(['reflog', 'show', 'HEAD']);
+      const moves = [
+        ...headReflog.matchAll(/checkout: moving from (\S+) to (\S+)\s*$/gm)
+      ].filter((match) => match[2] === localBranch);
+      // Reflog is newest first, so the last match is when the branch appeared.
+      const origin = this.normaliseBranchRef(moves.pop()?.[1], remote);
+      if (
+        origin &&
+        origin !== localBranch &&
+        (await this.remoteBranchExists(remote, origin))
+      ) {
+        return { branch: origin, source: 'HEAD reflog' };
+      }
+    } catch {
+      // No HEAD reflog either.
+    }
+
+    return undefined;
+  }
+
+  private async configValue(key: string): Promise<string | undefined> {
+    try {
+      const value = (await this.git.raw(['config', '--get', key])).trim();
+      return value.length > 0 ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** `origin/uat-aks`, `refs/heads/uat-aks` and `uat-aks` all mean `uat-aks`. */
+  private normaliseBranchRef(
+    ref: string | undefined,
+    remote: string
+  ): string | undefined {
+    if (!ref) {
+      return undefined;
+    }
+    const name = ref
+      .trim()
+      .replace(/^refs\/(heads|remotes)\//, '')
+      .replace(new RegExp(`^${remote}/`), '');
+    return name.length > 0 ? name : undefined;
+  }
+
+  /**
+   * Works out which branch the current one was actually created from.
+   *
+   * Git does not record that, but it is inferable: of all the remote branches,
+   * the parent is the one whose merge base with HEAD is the most recent. In a
+   * repo with several long-lived branches (dev / uat / release), this is what
+   * makes a branch cut from `uat` compare against `uat` and not against
+   * whatever `origin/HEAD` happens to point at.
+   *
+   * Returns `undefined` when nothing beats the default branch, so callers can
+   * fall back to `detectDefaultBranch`.
+   */
+  async detectParentBranch(
+    remote: string,
+    localBranch: string,
+    defaultBranch: string
+  ): Promise<string | undefined> {
+    const all = (await this.listRemoteBranches(remote)).filter(
+      // Your own pushed branch is not a parent, and neither is the symref.
+      (branch) => branch !== localBranch && branch !== 'HEAD'
+    );
+
+    // A plain slice would drop branches alphabetically — in a repo with 144
+    // branches that is how `uat-aks` gets cut while `prod-aks` survives. Keep
+    // the default branch and the most recently updated ones instead.
+    const candidates =
+      all.length <= PARENT_CANDIDATE_LIMIT
+        ? all
+        : [
+            ...new Set([
+              ...(all.includes(defaultBranch) ? [defaultBranch] : []),
+              ...(await this.branchesByRecency(remote)).filter((branch) =>
+                all.includes(branch)
+              )
+            ])
+          ].slice(0, PARENT_CANDIDATE_LIMIT);
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const bases: { branch: string; sha: string }[] = [];
+    for (const branch of candidates) {
+      try {
+        const sha = (
+          await this.git.raw(['merge-base', 'HEAD', `${remote}/${branch}`])
+        ).trim();
+        if (sha.length > 0) {
+          bases.push({ branch, sha });
+        }
+      } catch {
+        // Unrelated histories — not a parent.
+      }
+    }
+
+    if (bases.length === 0) {
+      return undefined;
+    }
+
+    // One call for every timestamp rather than one call per candidate.
+    const timestamps = new Map<string, number>();
+    try {
+      const output = await this.git.raw([
+        'log',
+        '--no-walk',
+        '--format=%H %ct',
+        ...new Set(bases.map((base) => base.sha))
+      ]);
+      for (const line of lines(output)) {
+        const [sha, seconds] = line.split(' ');
+        if (sha && seconds) {
+          timestamps.set(sha, Number.parseInt(seconds, 10));
+        }
+      }
+    } catch {
+      return undefined;
+    }
+
+    const dated = bases
+      .map((base) => ({ ...base, at: timestamps.get(base.sha) ?? 0 }))
+      .filter((base) => base.at > 0)
+      .sort((a, b) => b.at - a.at);
+
+    if (dated.length === 0) {
+      return undefined;
+    }
+
+    // Several branches often share the newest merge base — in particular every
+    // branch that already contains all of your work. Measuring the actual
+    // distance is what separates "the branch I cut from" (a few commits away)
+    // from "a branch that also happens to contain my work" (a thousand).
+    const newest = dated[0]!.at;
+    const shortlist = dated
+      .filter((base) => base.at === newest)
+      .slice(0, PARENT_SHORTLIST_LIMIT);
+
+    if (shortlist.length === 1) {
+      return shortlist[0]!.branch;
+    }
+
+    let best: { branch: string; ahead: number; behind: number } | undefined;
+    for (const candidate of shortlist) {
+      const counts = await this.countAheadBehind(`${remote}/${candidate.branch}`);
+      if (!counts) {
+        continue;
+      }
+      const better =
+        !best ||
+        counts.ahead < best.ahead ||
+        (counts.ahead === best.ahead && counts.behind < best.behind) ||
+        (counts.ahead === best.ahead &&
+          counts.behind === best.behind &&
+          candidate.branch === defaultBranch);
+      if (better) {
+        best = { branch: candidate.branch, ...counts };
+      }
+    }
+
+    return best?.branch ?? shortlist[0]!.branch;
+  }
+
+  private async countAheadBehind(
+    ref: string
+  ): Promise<{ ahead: number; behind: number } | undefined> {
+    try {
+      const output = await this.git.raw([
+        'rev-list',
+        '--left-right',
+        '--count',
+        `HEAD...${ref}`
+      ]);
+      const [ahead, behind] = lines(output.replace(/\s+/g, '\n')).map((part) =>
+        Number.parseInt(part, 10)
+      );
+      if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
+        return undefined;
+      }
+      return { ahead: ahead!, behind: behind! };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Remote branch names, most recently committed to first. */
+  private async branchesByRecency(remote: string): Promise<string[]> {
+    try {
+      const output = await this.git.raw([
+        'for-each-ref',
+        '--sort=-committerdate',
+        '--format=%(refname:short)',
+        `refs/remotes/${remote}`
+      ]);
+      return lines(output).map((ref) =>
+        ref.replace(new RegExp(`^${remote}/`), '')
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /** Remote branch names, without the `<remote>/` prefix. */
+  async listRemoteBranches(remote: string): Promise<string[]> {
+    try {
+      const output = await this.git.raw([
+        'for-each-ref',
+        '--format=%(refname:short)',
+        `refs/remotes/${remote}`
+      ]);
+      return lines(output).map((ref) =>
+        ref.replace(new RegExp(`^${remote}/`), '')
+      );
+    } catch {
+      return [];
+    }
   }
 
   async fetchRemote(remote: string): Promise<void> {

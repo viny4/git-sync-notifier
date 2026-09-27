@@ -6,6 +6,24 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-09-27
+
+### Fixed
+
+- Compare against the branch you actually cut from, not the repository's
+  default branch. In a repo with several long-lived branches (`dev`, `uat`,
+  `prod`), a branch created from `uat` was being compared against whatever
+  `origin/HEAD` pointed at — reporting dozens of irrelevant incoming commits,
+  and offering a merge that would have dragged unreleased work into a release
+  branch.
+
+  The branch point is read from what git and VS Code already record, in order:
+  `branch.<name>.vscode-merge-base`, the branch's reflog (`Created from …`),
+  then HEAD's reflog (`checkout: moving from … to …`). If nothing recorded it —
+  a fresh clone, or an expired reflog — the parent is inferred from the most
+  recent merge base, resolving ties by actual distance. `remoteBranch` still
+  overrides everything.
+
 ## [0.1.4] — 2026-09-27
 
 ### Changed

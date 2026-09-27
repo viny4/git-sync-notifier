@@ -9,6 +9,7 @@ background.
 
 - **Never merges on its own.** Every merge happens because you clicked a button.
 - **Fork-aware.** If a remote named `upstream` exists, that is what you are compared against — in a fork, `origin` is your own copy and the parent repository is the one you need to keep up with.
+- **Compares against the branch you actually cut from**, not just the repository default. If your team runs `dev` / `uat` / `prod` and you branched from `uat`, that is what you are measured against.
 - **Tells you who pushed.** *3 new commits on upstream/main from Alice and 1 other — latest: "refactor request handler" (12 minutes ago). Merge into feature?*
 - **Warns about conflict risk before you merge.** ⚠️ *1 file overlap with your changes* means an incoming commit touches a file your branch also changed.
 - **Details button** lists every incoming commit — subject, author, when, short SHA — and returns you to the prompt, so reviewing does not cost you the merge.
@@ -43,7 +44,7 @@ git repository in the new window to see the extension activate. Logs go to
 | `gitSyncNotifier.enabled` | `true` | Turn background checks off; also hides the status bar item. |
 | `gitSyncNotifier.pollIntervalMinutes` | `5` | Minutes between fetches. Clamped to a 1-minute floor. |
 | `gitSyncNotifier.remote` | `""` | Remote to compare against. Empty means auto-detect: `upstream` if it exists, else `origin`. |
-| `gitSyncNotifier.remoteBranch` | `""` | Branch on that remote. Empty means auto-detect: `<remote>/HEAD`, then `main`, then `master`. |
+| `gitSyncNotifier.remoteBranch` | `""` | Branch on that remote. Empty means auto-detect: the branch this one was created from, else `<remote>/HEAD`, then `main`, then `master`. |
 
 All three are per-workspace-folder settable, so a repo whose integration branch
 is `develop` can pin `gitSyncNotifier.remoteBranch` in `.vscode/settings.json`.

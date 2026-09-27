@@ -114,7 +114,7 @@ class SyncController implements vscode.Disposable {
       }
 
       const remoteBranch =
-        config.remoteBranch ?? (await this.git.detectDefaultBranch(remote.name));
+        config.remoteBranch ?? (await this.resolveComparisonBranch(remote.name));
       const status = await this.git.getStatus(remote, remoteBranch);
       this.lastErrorCode = undefined;
 
@@ -169,6 +169,48 @@ class SyncController implements vscode.Disposable {
     } catch (error) {
       this.handleError(error, options.manual);
     }
+  }
+
+  /**
+   * The branch to compare against: the one this branch was actually cut from,
+   * falling back to the remote's default branch. Repos with several long-lived
+   * branches (dev / uat / release) are the reason — a branch cut from `uat`
+   * should be compared against `uat`, not against whatever `origin/HEAD` says.
+   */
+  private async resolveComparisonBranch(remote: string): Promise<string> {
+    const defaultBranch = await this.git.detectDefaultBranch(remote);
+
+    let localBranch: string;
+    try {
+      localBranch = await this.git.currentBranch();
+    } catch {
+      return defaultBranch;
+    }
+
+    // Something may have recorded the branch point exactly; prefer that over
+    // any amount of inference.
+    const recorded = await this.git.readRecordedParent(remote, localBranch);
+    if (recorded) {
+      this.logger.info(
+        `${localBranch} was created from ${remote}/${recorded.branch} (per ${recorded.source}) — comparing against that.`
+      );
+      return recorded.branch;
+    }
+
+    const parent = await this.git.detectParentBranch(
+      remote,
+      localBranch,
+      defaultBranch
+    );
+
+    if (parent && parent !== defaultBranch) {
+      this.logger.info(
+        `${localBranch} looks like it was branched from ${remote}/${parent}, not the default ${remote}/${defaultBranch} — comparing against ${remote}/${parent}. Override with gitSyncNotifier.remoteBranch.`
+      );
+      return parent;
+    }
+
+    return defaultBranch;
   }
 
   private async merge(status: SyncStatus): Promise<void> {
