@@ -13,11 +13,15 @@ All notable changes to this extension are documented here. The format follows
 - Watches **every** repository in the workspace instead of only the first.
   Each one is checked, notified about and merged independently, and toasts are
   prefixed with the repository name when more than one is watched.
-- Repositories are found one level below a workspace folder as well as at the
-  folder itself. Keeping `frontend/`, `backend/`, `serverless/` and `packages/`
-  side by side and opening the parent folder now works — previously the
-  extension stayed dormant, because the parent folder is not itself a
-  repository.
+- Repositories come from VS Code's own git extension, so they are found at any
+  depth — exactly the repositories listed in the Source Control panel, honouring
+  `git.autoRepositoryDetection`. Opening a parent folder that holds several
+  repositories now works; previously the extension reported "no git repository
+  found in this workspace", because the folder itself is not a repository.
+  A one-level scan of each workspace folder still runs as a fallback for when
+  the built-in git extension is disabled or has not finished scanning.
+- Reloads when VS Code discovers or closes a repository, debounced so a burst
+  of discoveries causes one reload.
 - The status bar follows the file you are editing, showing that repository's
   state. With no matching file open it summarises instead: `↓6 in 3 repos`,
   or `4 repos in sync`. The tooltip lists every repository. With a single

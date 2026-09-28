@@ -313,7 +313,45 @@ const SKIP_DIRECTORIES = new Set([
   '__pycache__', '.next', '.nuxt', 'coverage', 'tmp', '.cache'
 ]);
 /** Guards against a workspace folder full of repositories. */
-const MAX_REPOSITORIES = 12;
+const MAX_REPOSITORIES = 20;
+/** Wait for repository discovery to settle before reloading. */
+const REPOSITORY_SETTLE_MS = 1_500;
+
+/** The slice of VS Code's built-in git extension API that we use. */
+interface BuiltInGitApi {
+  readonly repositories: { readonly rootUri: vscode.Uri }[];
+  onDidOpenRepository(listener: () => void): vscode.Disposable;
+  onDidCloseRepository(listener: () => void): vscode.Disposable;
+}
+
+/**
+ * Asks VS Code's own git extension which repositories it has found.
+ *
+ * It is the thing that fills the Source Control panel, so it already knows
+ * about repositories nested at any depth — `id10/src/common-lambda-lib`, say —
+ * and it honours the user's `git.autoRepositoryDetection` setting. Far better
+ * than guessing with our own directory walk.
+ */
+async function builtInGitApi(logger: Logger): Promise<BuiltInGitApi | undefined> {
+  const extension = vscode.extensions.getExtension<{
+    getAPI(version: number): BuiltInGitApi;
+  }>('vscode.git');
+
+  if (!extension) {
+    logger.info('The built-in git extension is not available.');
+    return undefined;
+  }
+
+  try {
+    const exports = extension.isActive
+      ? extension.exports
+      : await extension.activate();
+    return exports.getAPI(1);
+  } catch (error) {
+    logger.error('Could not use the built-in git extension API', error);
+    return undefined;
+  }
+}
 
 /**
  * Every repository in the workspace, not just the first.
@@ -335,6 +373,20 @@ async function findRepositories(logger: Logger): Promise<GitService[]> {
     return Boolean(git);
   };
 
+  // What VS Code itself has found comes first: it sees repositories at any
+  // depth, which a one-level scan cannot.
+  const api = await builtInGitApi(logger);
+  for (const repository of api?.repositories ?? []) {
+    if (found.size >= MAX_REPOSITORIES) {
+      break;
+    }
+    if (repository.rootUri.scheme === 'file') {
+      await consider(repository.rootUri.fsPath);
+    }
+  }
+
+  // Then our own look around, so this still works with the git extension
+  // disabled, or before it has finished scanning.
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     if (folder.uri.scheme !== 'file' || found.size >= MAX_REPOSITORIES) {
       continue;
@@ -430,7 +482,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     followActiveEditor();
   };
 
+  // VS Code discovers repositories asynchronously after startup, a few at a
+  // time. Debounce so seven repositories appearing in a burst cause one reload.
+  let reloadTimer: NodeJS.Timeout | undefined;
+  const scheduleReload = (): void => {
+    if (reloadTimer) {
+      clearTimeout(reloadTimer);
+    }
+    reloadTimer = setTimeout(() => {
+      reloadTimer = undefined;
+      void initialise();
+    }, REPOSITORY_SETTLE_MS);
+  };
+
+  const gitApi = await builtInGitApi(logger);
+  if (gitApi) {
+    context.subscriptions.push(
+      gitApi.onDidOpenRepository(scheduleReload),
+      gitApi.onDidCloseRepository(scheduleReload)
+    );
+  }
+
   context.subscriptions.push(
+    { dispose: () => reloadTimer && clearTimeout(reloadTimer) },
     vscode.commands.registerCommand('gitSyncNotifier.checkNow', async () => {
       if (controllers.length === 0) {
         await initialise();
