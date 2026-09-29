@@ -17,7 +17,7 @@ background.
 - **Status bar** shows `↓3 ↑2`, or `In sync`. With several repositories open it follows the file you are editing, and summarises (`↓6 in 3 repos`) when the active file belongs to none of them. Hover for the full breakdown; click to check on demand.
 - **Watches every repository in the workspace**, each independently — a frontend, a backend, some services, whether opened as a multi-root workspace or as one parent folder holding them all.
 - **Conflicts go to VS Code's own merge editor.** Nothing is ever resolved programmatically.
-- **Does not spam you.** One alert per new commit range, and errors are deduplicated so a flaky network stays quiet.
+- **Does not spam you.** One alert per new commit range, and errors are deduplicated so a flaky network stays quiet. With several repositories behind at once you get a single summary — *"6 repositories behind by 13 commits"* — and a picker, not six popups.
 - Fetches on a configurable interval and when the window regains focus, throttled so the two do not double-fire.
 
 ## Install
@@ -95,6 +95,8 @@ src/
 ├── gitService.ts   # every git call (fetch, rev-list, merge, branch detection)
 ├── notifier.ts     # notifications and routing to the merge editor
 ├── statusBar.ts    # the one status bar item, shared across repositories
+├── summary.ts      # batches simultaneous "behind" reports into one message
+├── scheduler.ts    # caps how many repositories fetch at the same time
 ├── config.ts       # workspace settings
 ├── state.ts        # workspaceState: which commit ranges were dismissed
 └── logger.ts       # "Git Sync Notifier" output channel

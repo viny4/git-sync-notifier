@@ -5,6 +5,8 @@ import { GitService, GitServiceError, SyncStatus } from './gitService';
 import { Logger } from './logger';
 import { Notifier } from './notifier';
 import { StatusBar } from './statusBar';
+import { Scheduler } from './scheduler';
+import { SummaryNotifier } from './summary';
 import { NotificationState, RangeSignature } from './state';
 
 /** Refocusing the window more often than this does not trigger a new fetch. */
@@ -27,7 +29,11 @@ class SyncController implements vscode.Disposable {
     private readonly state: NotificationState,
     private readonly logger: Logger,
     /** Repository name, used to keep log lines apart when several are watched. */
-    readonly label: string
+    readonly label: string,
+    /** Shared gate so repositories do not all fetch at once. */
+    private readonly scheduler: Scheduler,
+    /** Collects simultaneous "behind" reports into one notification. */
+    private readonly summary: SummaryNotifier
   ) {}
 
   /**
@@ -78,6 +84,11 @@ class SyncController implements vscode.Disposable {
     void this.check({ manual: false });
   }
 
+  /** True while a check is running, so batching can wait for the round. */
+  get isChecking(): boolean {
+    return this.inFlight !== undefined;
+  }
+
   /** Serialised: a second caller awaits the check already running. */
   async check(options: { manual: boolean }): Promise<void> {
     if (this.inFlight) {
@@ -118,7 +129,9 @@ class SyncController implements vscode.Disposable {
       }
 
       const remote = await this.git.detectComparisonRemote(config.remote);
-      const fetchResult = await this.git.fetchForComparison(remote.name);
+      const fetchResult = await this.scheduler.run(() =>
+        this.git.fetchForComparison(remote.name)
+      );
       if (fetchResult.originFetchFailed) {
         this.logger.warn(
           `Could not fetch origin (your fork): ${fetchResult.originFetchFailed}`
@@ -162,6 +175,34 @@ class SyncController implements vscode.Disposable {
         return;
       }
 
+      // Several repositories falling behind at once become one message rather
+      // than a stack of popups. Below the threshold this releases straight
+      // back to the per-repository prompt.
+      if (
+        !options.manual &&
+        this.summary.collect(this.git.repoRoot, {
+          label: this.label,
+          status,
+          merge: () => this.merge(status),
+          dismiss: () => this.state.markDismissed(signature),
+          onOwnNotification: () => this.promptAndAct(status, signature)
+        })
+      ) {
+        return;
+      }
+
+      await this.promptAndAct(status, signature);
+    } catch (error) {
+      this.handleError(error, options.manual);
+    }
+  }
+
+  /** The per-repository prompt, and whatever the user chose. */
+  private async promptAndAct(
+    status: SyncStatus,
+    signature: RangeSignature
+  ): Promise<void> {
+    try {
       // "Details" returns to the prompt, so reviewing the commits does not
       // cost the user their chance to merge.
       for (;;) {
@@ -179,7 +220,7 @@ class SyncController implements vscode.Disposable {
         return;
       }
     } catch (error) {
-      this.handleError(error, options.manual);
+      this.handleError(error, true);
     }
   }
 
@@ -316,6 +357,14 @@ const SKIP_DIRECTORIES = new Set([
 const MAX_REPOSITORIES = 20;
 /** Wait for repository discovery to settle before reloading. */
 const REPOSITORY_SETTLE_MS = 1_500;
+/** How many repositories may fetch at the same time. */
+const FETCH_CONCURRENCY = 3;
+/** Workspaces with at least this many repositories get batched notifications. */
+const SUMMARY_THRESHOLD = 3;
+/** Flush the batch once no further repository has reported in for this long. */
+const SUMMARY_QUIET_MS = 5_000;
+/** Never hold a "behind" notification longer than this while batching. */
+const SUMMARY_MAX_WAIT_MS = 30_000;
 
 /** The slice of VS Code's built-in git extension API that we use. */
 interface BuiltInGitApi {
@@ -332,7 +381,17 @@ interface BuiltInGitApi {
  * and it honours the user's `git.autoRepositoryDetection` setting. Far better
  * than guessing with our own directory walk.
  */
-async function builtInGitApi(logger: Logger): Promise<BuiltInGitApi | undefined> {
+let gitApiLookup: Promise<BuiltInGitApi | undefined> | undefined;
+
+/** Cached, so activation and each repository scan do not repeat the lookup. */
+function builtInGitApi(logger: Logger): Promise<BuiltInGitApi | undefined> {
+  gitApiLookup ??= lookUpBuiltInGitApi(logger);
+  return gitApiLookup;
+}
+
+async function lookUpBuiltInGitApi(
+  logger: Logger
+): Promise<BuiltInGitApi | undefined> {
   const extension = vscode.extensions.getExtension<{
     getAPI(version: number): BuiltInGitApi;
   }>('vscode.git');
@@ -431,6 +490,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const state = new NotificationState(context.workspaceState);
   context.subscriptions.push(logger, statusBar);
 
+  const scheduler = new Scheduler(FETCH_CONCURRENCY);
+  const summary = new SummaryNotifier(
+    SUMMARY_THRESHOLD,
+    SUMMARY_MAX_WAIT_MS,
+    SUMMARY_QUIET_MS,
+    () => controllers.length
+  );
+  context.subscriptions.push(summary);
+
   let controllers: SyncController[] = [];
   const isMultiRepo = () => controllers.length > 1;
 
@@ -472,7 +540,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     controllers = repositories.map((git) => {
       const label = labelFor(git.repoRoot);
       const notifier = new Notifier(logger, statusBar, git.repoRoot, label, isMultiRepo);
-      return new SyncController(git, notifier, state, logger, label);
+      return new SyncController(
+        git,
+        notifier,
+        state,
+        logger,
+        label,
+        scheduler,
+        summary
+      );
     });
 
     controllers.forEach((controller, index) => {

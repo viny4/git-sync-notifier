@@ -6,6 +6,23 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-09-29
+
+### Added
+
+- One summary notification instead of a stack of them. In a workspace with
+  three or more repositories, when three or more fall behind at once you get
+  *"6 repositories behind by 13 commits in total"* with **Review** — a
+  multi-select picker listing each repository, how far behind it is and whether
+  its incoming files overlap with your changes — and **Dismiss All**. Fewer
+  repositories, or fewer behind, still notify individually as before.
+
+### Changed
+
+- At most three repositories fetch at the same time. Previously a window
+  regaining focus, or one *Check Upstream Now*, made every repository fetch at
+  once — ten simultaneous `git fetch` calls over a VPN is a visible stall.
+
 ## [0.1.6] — 2026-09-27
 
 ### Added
