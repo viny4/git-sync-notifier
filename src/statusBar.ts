@@ -179,6 +179,13 @@ export class StatusBar implements vscode.Disposable {
       this.item.backgroundColor = new vscode.ThemeColor(
         'statusBarItem.warningBackground'
       );
+    } else if (behind.length === 1) {
+      // "↓1 in 1 repo" reads badly; name the repository instead.
+      const only = [...this.entries.values()].find(
+        (entry) => entry.view.kind === 'behind'
+      )!;
+      this.renderOne(only, true);
+      return;
     } else if (behind.length > 0) {
       this.item.text = `$(cloud-download) ↓${totalBehind} in ${plural(behind.length, 'repo')}`;
       this.item.backgroundColor = new vscode.ThemeColor(

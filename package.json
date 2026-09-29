@@ -2,7 +2,7 @@
   "name": "git-sync-notifier",
   "displayName": "Git Upstream Sync Notifier",
   "description": "Notifies you when your branch falls behind the default upstream branch, and merges only when you ask.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "viny4",
   "author": {
     "name": "viny",

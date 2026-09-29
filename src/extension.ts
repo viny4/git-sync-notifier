@@ -76,9 +76,8 @@ class SyncController implements vscode.Disposable {
     }
     const elapsed = Date.now() - this.lastCheckAt;
     if (elapsed < FOCUS_THROTTLE_MS) {
-      this.logger.info(
-        `Window focused, but last check was ${Math.round(elapsed / 1000)}s ago — skipping.`
-      );
+      // Deliberately not logged: with ten repositories this fired ten lines
+      // every time the window regained focus.
       return;
     }
     void this.check({ manual: false });
@@ -306,7 +305,22 @@ class SyncController implements vscode.Disposable {
    */
   private handleError(error: unknown, manual: boolean): void {
     if (error instanceof GitServiceError) {
-      this.logger.error(`[${error.code}] ${error.message}`, error.detail);
+      // A detached HEAD or an empty repository is a state, not a failure —
+      // there is simply nothing to compare. Repositories pinned to a commit
+      // sit like that permanently, so warning about them every poll is pure
+      // noise. Log once, show nothing, and stay quiet until it changes.
+      if (INAPPLICABLE_CODES.has(error.code)) {
+        if (this.lastErrorCode !== error.code) {
+          this.logger.info(`[${this.label}] ${error.message} Nothing to check.`);
+        }
+        this.notifier.setStatus({ kind: 'idle' });
+        this.lastErrorCode = error.code;
+        return;
+      }
+
+      if (this.lastErrorCode !== error.code) {
+        this.logger.error(`[${error.code}] ${error.message}`, error.detail);
+      }
       this.notifier.setStatus({ kind: 'error', message: error.message });
       if (manual || this.lastErrorCode !== error.code) {
         this.notifier.showError(error.message, error.detail);
@@ -359,6 +373,12 @@ const MAX_REPOSITORIES = 20;
 const REPOSITORY_SETTLE_MS = 1_500;
 /** How many repositories may fetch at the same time. */
 const FETCH_CONCURRENCY = 3;
+/**
+ * States where there is simply nothing to compare. Not failures, so they never
+ * produce a notification — a repository pinned to a commit stays detached for
+ * as long as you have it open.
+ */
+const INAPPLICABLE_CODES = new Set(['detached-head', 'no-commits']);
 /** Workspaces with at least this many repositories get batched notifications. */
 const SUMMARY_THRESHOLD = 3;
 /** Flush the batch once no further repository has reported in for this long. */

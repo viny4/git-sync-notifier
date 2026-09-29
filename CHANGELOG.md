@@ -6,6 +6,19 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-09-29
+
+### Fixed
+
+- A repository pinned to a commit (detached HEAD), or one with no commits yet,
+  no longer reports an error. There is nothing to compare in either case, so it
+  is logged once and otherwise ignored — previously every poll warned about it,
+  which is constant noise for a repository that is deliberately pinned.
+- "Window focused … skipping" was logged once per repository on every focus
+  change. It is no longer logged at all.
+- The status bar names the repository when exactly one is behind
+  (`app ↓1`) instead of saying `↓1 in 1 repo`.
+
 ## [0.1.7] — 2026-09-29
 
 ### Added
