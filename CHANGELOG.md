@@ -6,6 +6,28 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-10-06
+
+### Added
+
+- A test suite (`npm test`) that drives the extension against real throwaway
+  git repositories and a stubbed editor: default branch detection, merges and
+  conflicts, forks, parent-branch resolution, and what the user actually sees —
+  how many notifications, saying what, and how often. It runs in CI.
+
+### Fixed
+
+- Every repository could be announced twice. Repository discovery is
+  asynchronous and VS Code reports repositories in a burst, so a second setup
+  could start while the first was still running; both built their own watchers
+  and started polling, but only the last set was remembered, leaving the
+  earlier one running forever. Setup is now serialised.
+- A notification you never answered is no longer repeated at every poll. VS
+  Code hides toasts after a few seconds by itself, and that silence was not
+  recorded, so the same commit range was announced again every few minutes.
+  It now stays quiet for an hour, or until new commits arrive — dismissing
+  explicitly still silences it until the range changes.
+
 ## [0.1.8] — 2026-09-29
 
 ### Fixed

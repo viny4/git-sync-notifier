@@ -13,3 +13,4 @@ PUBLISHING.md
 GUIDE.md
 media/icon.svg
 *.vsix
+test/**

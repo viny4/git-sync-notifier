@@ -17,6 +17,8 @@ export interface SummaryEntry {
   merge: () => Promise<void>;
   /** Remember that this range was dismissed. */
   dismiss: () => Promise<void>;
+  /** Stay quiet for a while: the notification faded without an answer. */
+  ignore: () => Promise<void>;
   /** Called instead when the batch turned out too small to be worth summarising. */
   onOwnNotification: () => Promise<void>;
 }
@@ -128,6 +130,10 @@ export class SummaryNotifier {
       return;
     }
     if (choice !== REVIEW) {
+      // Faded without an answer — do not repeat it at the next poll.
+      for (const entry of entries) {
+        await entry.ignore();
+      }
       return;
     }
 

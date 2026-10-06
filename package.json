@@ -2,7 +2,7 @@
   "name": "git-sync-notifier",
   "displayName": "Git Upstream Sync Notifier",
   "description": "Notifies you when your branch falls behind the default upstream branch, and merges only when you ask.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "viny4",
   "author": {
     "name": "viny",
@@ -85,7 +85,8 @@
     "typecheck": "tsc -p ./",
     "bundle": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test": "node test/run.js"
   },
   "dependencies": {
     "simple-git": "^3.27.0"

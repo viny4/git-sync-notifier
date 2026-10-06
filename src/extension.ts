@@ -167,9 +167,9 @@ class SyncController implements vscode.Disposable {
       this.notifier.setStatus({ kind: 'behind', status });
 
       const signature = signatureOf(status);
-      if (!options.manual && this.state.isDismissed(signature)) {
+      if (!options.manual && this.state.isSuppressed(signature)) {
         this.logger.info(
-          'This commit range was already dismissed — not notifying again.'
+          `[${this.label}] this commit range was already announced — staying quiet.`
         );
         return;
       }
@@ -184,6 +184,7 @@ class SyncController implements vscode.Disposable {
           status,
           merge: () => this.merge(status),
           dismiss: () => this.state.markDismissed(signature),
+          ignore: () => this.state.snooze(signature, UNANSWERED_QUIET_MS),
           onOwnNotification: () => this.promptAndAct(status, signature)
         })
       ) {
@@ -215,6 +216,10 @@ class SyncController implements vscode.Disposable {
         } else if (choice === 'dismiss') {
           await this.state.markDismissed(signature);
           this.logger.info('Dismissed; will alert again on the next new commit.');
+        } else {
+          // The toast faded without an answer. Stay quiet for a while rather
+          // than repeating it at every poll.
+          await this.state.snooze(signature, UNANSWERED_QUIET_MS);
         }
         return;
       }
@@ -381,6 +386,12 @@ const FETCH_CONCURRENCY = 3;
 const INAPPLICABLE_CODES = new Set(['detached-head', 'no-commits']);
 /** Workspaces with at least this many repositories get batched notifications. */
 const SUMMARY_THRESHOLD = 3;
+/**
+ * How long a range stays quiet after a notification the user never answered.
+ * VS Code hides toasts by itself, so "no answer" is the common case, and
+ * without this the same range is re-announced on every poll.
+ */
+const UNANSWERED_QUIET_MS = 60 * 60_000;
 /** Flush the batch once no further repository has reported in for this long. */
 const SUMMARY_QUIET_MS = 5_000;
 /** Never hold a "behind" notification longer than this while batching. */
@@ -536,7 +547,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar.setActiveRepo(match?.git.repoRoot);
   };
 
+  /**
+   * Serialised, because repository discovery is asynchronous and VS Code
+   * announces repositories in a burst. Two overlapping runs each built their
+   * own controllers and started their timers, but only the last assignment was
+   * remembered — the earlier set kept polling forever, undisposed, and every
+   * repository notified twice.
+   */
+  let initialising: Promise<void> | undefined;
+  let reinitialiseRequested = false;
+
   const initialise = async (): Promise<void> => {
+    if (initialising) {
+      reinitialiseRequested = true;
+      return initialising;
+    }
+    initialising = runInitialise().finally(() => {
+      initialising = undefined;
+      if (reinitialiseRequested) {
+        reinitialiseRequested = false;
+        void initialise();
+      }
+    });
+    return initialising;
+  };
+
+  const runInitialise = async (): Promise<void> => {
     for (const controller of controllers) {
       controller.dispose();
     }

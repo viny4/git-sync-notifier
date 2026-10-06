@@ -16,6 +16,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run compile
+      - name: Configure git for the test repositories
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+      - run: npm test
       - name: Package (catches manifest problems before release)
         run: npx @vscode/vsce package --allow-missing-repository --skip-license
       - uses: actions/upload-artifact@v4
