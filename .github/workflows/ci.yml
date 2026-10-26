@@ -7,12 +7,14 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: that label moves to Ubuntu 26, and a
+    # runner image changing under us is not something a release should discover.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run compile
@@ -24,7 +26,7 @@ jobs:
       - run: npm test
       - name: Package (catches manifest problems before release)
         run: npx @vscode/vsce package --allow-missing-repository --skip-license
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vsix
           path: '*.vsix'
