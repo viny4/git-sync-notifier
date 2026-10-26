@@ -6,6 +6,22 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Stash & Merge.** When git refuses the merge because of uncommitted work,
+  the extension now offers to set that work aside, merge, and put it back —
+  previously it only said "commit or stash them, then try again" and left you
+  to do it by hand. The notification names the files involved, and nothing is
+  stashed without the click. If restoring the work conflicts, or the merge
+  itself stops with conflicts, the stash is deliberately kept and you are told
+  where it is.
+
+### Fixed
+
+- The merge editor no longer opens an "editor could not be opened" pane. It
+  was asked for files that git no longer has all three sides of — a merge that
+  was aborted, or a conflict already resolved. The file is checked first.
+
 ## [0.1.9] — 2026-10-06
 
 ### Added

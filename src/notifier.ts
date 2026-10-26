@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Logger } from './logger';
-import { summarizeAuthors, SyncStatus } from './gitService';
+import { StashOutcome, summarizeAuthors, SyncStatus } from './gitService';
 import { StatusBar, StatusView } from './statusBar';
 
 export type BehindChoice = 'merge' | 'details' | 'dismiss' | 'ignored';
@@ -10,6 +10,8 @@ const DETAILS = 'Details';
 const DISMISS = 'Dismiss';
 const SHOW_CONFLICTS = 'Open Merge Editor';
 const SHOW_LOG = 'Show Log';
+const STASH_AND_MERGE = 'Stash & Merge';
+const OPEN_SCM = 'Open Source Control';
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -107,6 +109,58 @@ export class Notifier implements vscode.Disposable {
     }
   }
 
+  /**
+   * git refused the merge because of uncommitted work. Offer to set it aside
+   * and put it back afterwards — still a click, never automatic.
+   */
+  async offerStashAndMerge(files: string[]): Promise<boolean> {
+    const list = files.slice(0, 3).join(', ');
+    const more = files.length > 3 ? `, +${files.length - 3} more` : '';
+    const choice = await vscode.window.showWarningMessage(
+      this.scoped(
+        `Cannot merge with uncommitted changes in ${plural(files.length, 'file')}` +
+          (list ? ` (${list}${more})` : '') +
+          '. Set them aside, merge, then put them back?'
+      ),
+      { modal: false },
+      STASH_AND_MERGE,
+      OPEN_SCM
+    );
+    if (choice === STASH_AND_MERGE) {
+      return true;
+    }
+    if (choice === OPEN_SCM) {
+      await vscode.commands.executeCommand('workbench.view.scm');
+    }
+    return false;
+  }
+
+  /** What happened to the work we set aside. Silent when it went back cleanly. */
+  async reportStash(outcome: StashOutcome): Promise<void> {
+    if (outcome.kind === 'restored') {
+      return;
+    }
+    if (outcome.kind === 'restored-with-conflicts') {
+      void vscode.window.showWarningMessage(
+        this.scoped(
+          `Your changes went back with conflicts in ${plural(outcome.files.length, 'file')}. ` +
+            'The stash is still saved until you resolve them.'
+        )
+      );
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      this.scoped(
+        `Your changes are saved in a stash and were not restored — ${outcome.reason}. ` +
+          'Run "Git: Pop Stash" once the working tree is settled.'
+      ),
+      OPEN_SCM
+    );
+    if (choice === OPEN_SCM) {
+      await vscode.commands.executeCommand('workbench.view.scm');
+    }
+  }
+
   showMergeSucceeded(status: SyncStatus): void {
     void vscode.window.showInformationMessage(
       this.scoped(
@@ -168,6 +222,16 @@ export class Notifier implements vscode.Disposable {
     }
 
     const uri = vscode.Uri.file(absolutePath(first));
+    // The merge editor needs all three sides from git. If the file is gone —
+    // the merge was aborted, or the conflict is already resolved — asking for
+    // it renders an error pane the user cannot act on, so check first.
+    try {
+      await vscode.workspace.fs.stat(uri);
+    } catch {
+      this.logger.warn(`${first} no longer exists; not opening the merge editor.`);
+      return;
+    }
+
     try {
       // Contributed by the built-in git extension; opens the 3-way merge editor.
       await vscode.commands.executeCommand('git.openMergeEditor', uri);

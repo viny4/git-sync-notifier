@@ -173,11 +173,70 @@ async function errorScenario() {
   check('slug: bare local path', parseSlug('/local/path/repo.git'), undefined);
 }
 
+// Uncommitted work is the usual reason a merge is refused. The extension
+// offers to set it aside; these cover what happens when it does.
+async function stashScenario() {
+  const base = path.join(root, 'stash');
+  fs.mkdirSync(base, { recursive: true });
+  git(base, 'init', '-q', '--bare', '-b', 'main', 'origin.git');
+  const bare = path.join(base, 'origin.git');
+  git(base, 'clone', '-q', bare, 'work');
+  const work = path.join(base, 'work');
+  commitAs(work, 'Dev', 'shared.txt', 'line one\n', 'initial');
+  commitAs(work, 'Dev', 'mine.txt', 'mine\n', 'my file');
+  git(work, 'push', '-q', '-u', 'origin', 'main');
+  git(base, 'clone', '-q', bare, 'peer');
+  const peer = path.join(base, 'peer');
+  const svc = await GitService.open(work);
+
+  section('a merge is refused while the tree is dirty');
+  commitAs(peer, 'Peer', 'shared.txt', 'line one\nupstream\n', 'upstream change');
+  git(peer, 'push', '-q', 'origin', 'main');
+  await svc.fetchRemote('origin');
+  fs.writeFileSync(path.join(work, 'shared.txt'), 'line one\nmy edit\n');
+  check('the dirty file is reported', await svc.localChanges(), ['shared.txt']);
+  try {
+    await svc.mergeFrom('origin', 'main');
+    check('merge refused', false, true);
+  } catch (error) {
+    check('merge refused', error.code, 'dirty-worktree');
+  }
+
+  section('stashing lets the merge through and puts the work back');
+  // The edit touches the same file as the incoming commit, so popping the
+  // stash conflicts — the stash is kept, which is the whole point.
+  let result = await svc.mergeFrom('origin', 'main', { stashLocalChanges: true });
+  check('the merge itself succeeded', result.kind, 'merged');
+  check('the work came back with conflicts', result.stash.kind, 'restored-with-conflicts');
+  check('and the stash is still saved', git(work, 'stash', 'list').trim().length > 0, true);
+  git(work, 'checkout', '-q', '--ours', '--', 'shared.txt');
+  git(work, 'reset', '-q', '--hard', 'HEAD');
+  git(work, 'stash', 'drop', '-q');
+
+  section('untouched work is restored cleanly');
+  commitAs(peer, 'Peer', 'theirs.txt', 'theirs\n', 'unrelated upstream change');
+  git(peer, 'push', '-q', 'origin', 'main');
+  await svc.fetchRemote('origin');
+  fs.writeFileSync(path.join(work, 'mine.txt'), 'mine, edited\n');
+  result = await svc.mergeFrom('origin', 'main', { stashLocalChanges: true });
+  check('merged', result.kind, 'merged');
+  check('work restored', result.stash.kind, 'restored');
+  check('the edit is still there', fs.readFileSync(path.join(work, 'mine.txt'), 'utf8'), 'mine, edited\n');
+  check('nothing left in the stash', git(work, 'stash', 'list').trim(), '');
+
+  section('a clean tree needs no stash');
+  git(work, 'checkout', '-q', '--', 'mine.txt');
+  result = await svc.mergeFrom('origin', 'main', { stashLocalChanges: true });
+  check('already up to date', result.kind, 'up-to-date');
+  check('no stash was taken', result.stash, undefined);
+}
+
 module.exports = async function run() {
   process.env.GIT_TERMINAL_PROMPT = '0';
   await coreScenario('main');
   await coreScenario('master');
   await forkScenario();
+  await stashScenario();
   await errorScenario();
   void pushUpstreamCommits;
 };

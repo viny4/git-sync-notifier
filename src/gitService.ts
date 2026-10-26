@@ -77,9 +77,19 @@ export interface SyncStatus {
 }
 
 export type MergeResult =
-  | { kind: 'merged'; summary: string }
-  | { kind: 'up-to-date' }
-  | { kind: 'conflict'; files: string[] };
+  | { kind: 'merged'; summary: string; stash?: StashOutcome }
+  | { kind: 'up-to-date'; stash?: StashOutcome }
+  | { kind: 'conflict'; files: string[]; stash?: StashOutcome };
+
+/**
+ * What happened to the work we set aside before merging. `kept` means the
+ * stash is still on the stack because restoring it would have been unsafe or
+ * failed — the user has to deal with it, so we always say so.
+ */
+export type StashOutcome =
+  | { kind: 'restored'; files: string[] }
+  | { kind: 'restored-with-conflicts'; files: string[] }
+  | { kind: 'kept'; files: string[]; reason: string };
 
 const NETWORK_PATTERNS = [
   /could not resolve (host|proxy)/i,
@@ -738,7 +748,99 @@ export class GitService {
     }
   }
 
-  async mergeFrom(remote: string, remoteBranch: string): Promise<MergeResult> {
+  /**
+   * Tracked files with staged or unstaged edits — the ones that make git
+   * refuse a merge. Untracked files are left out: they only ever block a
+   * merge that would overwrite them, and stashing them surprises people.
+   */
+  async localChanges(): Promise<string[]> {
+    try {
+      const output = await this.git.raw(['status', '--porcelain', '--untracked-files=no']);
+      return lines(output)
+        .map((line) => line.slice(2).trim())
+        // "old -> new" for renames; the new path is the useful half.
+        .map((file) => (file.includes(' -> ') ? file.split(' -> ')[1]!.trim() : file))
+        .map((file) => file.replace(/^"|"$/g, ''))
+        .filter((file) => file.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Sets local work aside, merges, then puts it back. Only ever called after
+   * the user has explicitly asked for it — nothing stashes on its own.
+   */
+  private async mergeWithStash(remote: string, remoteBranch: string): Promise<MergeResult> {
+    const files = await this.localChanges();
+    if (files.length === 0) {
+      return this.runMerge(remote, remoteBranch);
+    }
+
+    const label = `git-sync-notifier: before merging ${remote}/${remoteBranch}`;
+    try {
+      // No `--include-untracked`: stashing files git is not tracking yet is a
+      // surprise, and they do not block a merge unless it would overwrite one.
+      await this.git.raw(['stash', 'push', '-m', label]);
+    } catch (error) {
+      throw new GitServiceError(
+        'dirty-worktree',
+        'Your local changes could not be stashed, so nothing was merged.',
+        errorText(error)
+      );
+    }
+
+    let result: MergeResult;
+    try {
+      result = await this.runMerge(remote, remoteBranch);
+    } catch (error) {
+      // The merge never started, so the tree is clean and the stash is safe
+      // to restore before the error travels on.
+      await this.restoreStash(files);
+      throw error;
+    }
+
+    if (result.kind === 'conflict') {
+      // Popping on top of conflict markers would tangle two sets of changes
+      // beyond untangling. Leave the stash alone and say where it is.
+      return {
+        ...result,
+        stash: {
+          kind: 'kept',
+          files,
+          reason: 'the merge stopped with conflicts'
+        }
+      };
+    }
+
+    return { ...result, stash: await this.restoreStash(files) };
+  }
+
+  private async restoreStash(files: string[]): Promise<StashOutcome> {
+    try {
+      await this.git.raw(['stash', 'pop']);
+    } catch (error) {
+      const text = errorText(error);
+      const conflicted = await this.conflictedFiles();
+      if (conflicted.length > 0) {
+        // `stash pop` leaves the stash in place when it conflicts, which is
+        // what we want: the user can retry or drop it once they have resolved.
+        return { kind: 'restored-with-conflicts', files: conflicted };
+      }
+      return { kind: 'kept', files, reason: text.split('\n')[0] ?? 'git stash pop failed' };
+    }
+    const conflicted = await this.conflictedFiles();
+    if (conflicted.length > 0) {
+      return { kind: 'restored-with-conflicts', files: conflicted };
+    }
+    return { kind: 'restored', files };
+  }
+
+  async mergeFrom(
+    remote: string,
+    remoteBranch: string,
+    options: { stashLocalChanges?: boolean } = {}
+  ): Promise<MergeResult> {
     if (await this.isMergeInProgress()) {
       throw new GitServiceError(
         'merge-in-progress',
@@ -746,6 +848,13 @@ export class GitService {
       );
     }
 
+    if (options.stashLocalChanges) {
+      return this.mergeWithStash(remote, remoteBranch);
+    }
+    return this.runMerge(remote, remoteBranch);
+  }
+
+  private async runMerge(remote: string, remoteBranch: string): Promise<MergeResult> {
     let output: string;
     try {
       output = await this.git.raw(['merge', '--no-edit', `${remote}/${remoteBranch}`]);
@@ -759,7 +868,7 @@ export class GitService {
       if (matchesAny(text, DIRTY_PATTERNS)) {
         throw new GitServiceError(
           'dirty-worktree',
-          'The merge was refused because of uncommitted local changes. Commit or stash them, then try again.',
+          'The merge was refused because of uncommitted local changes.',
           text
         );
       }

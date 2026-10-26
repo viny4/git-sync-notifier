@@ -270,13 +270,21 @@ class SyncController implements vscode.Disposable {
     return defaultBranch;
   }
 
-  private async merge(status: SyncStatus): Promise<void> {
+  private async merge(status: SyncStatus, stashLocalChanges = false): Promise<void> {
     this.logger.info(
-      `Merging ${status.remote.name}/${status.remoteBranch} into ${status.localBranch}.`
+      `Merging ${status.remote.name}/${status.remoteBranch} into ${status.localBranch}` +
+        `${stashLocalChanges ? ', stashing local changes first' : ''}.`
     );
 
     try {
-      const result = await this.git.mergeFrom(status.remote.name, status.remoteBranch);
+      const result = await this.git.mergeFrom(status.remote.name, status.remoteBranch, {
+        stashLocalChanges
+      });
+
+      if (result.stash) {
+        this.logger.info(`Stashed work: ${result.stash.kind}.`);
+        void this.notifier.reportStash(result.stash);
+      }
 
       if (result.kind === 'conflict') {
         this.logger.warn(
@@ -300,6 +308,24 @@ class SyncController implements vscode.Disposable {
       await this.state.clear(signatureOf(status));
       this.notifier.setStatus({ kind: 'synced', status: { ...status, behind: 0 } });
     } catch (error) {
+      // git refused because of uncommitted work. That is not a failure the
+      // user can do nothing about — offer to set the work aside and retry.
+      if (
+        error instanceof GitServiceError &&
+        error.code === 'dirty-worktree' &&
+        !stashLocalChanges
+      ) {
+        const files = await this.git.localChanges();
+        this.logger.info(
+          `Merge refused: ${files.length} file(s) with uncommitted changes. Offering to stash.`
+        );
+        if (await this.notifier.offerStashAndMerge(files)) {
+          await this.merge(status, true);
+          return;
+        }
+        this.notifier.setStatus({ kind: 'error', message: error.message });
+        return;
+      }
       this.handleError(error, true);
     }
   }

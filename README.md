@@ -16,6 +16,7 @@ background.
 - **Three counts, not one.** Behind, ahead, and how many commits you have not pushed to your own fork yet.
 - **Status bar** shows `↓3 ↑2`, or `In sync`. With several repositories open it follows the file you are editing, and summarises (`↓6 in 3 repos`) when the active file belongs to none of them. Hover for the full breakdown; click to check on demand.
 - **Watches every repository in the workspace**, each independently — a frontend, a backend, some services, whether opened as a multi-root workspace or as one parent folder holding them all.
+- **Uncommitted work does not block you.** If git refuses the merge because your tree is dirty, the extension offers **Stash & Merge** — it sets your changes aside, merges, and puts them back. If putting them back would conflict, the stash is kept and you are told so.
 - **Conflicts go to VS Code's own merge editor.** Nothing is ever resolved programmatically.
 - **Does not spam you.** One alert per new commit range, and errors are deduplicated so a flaky network stays quiet. With several repositories behind at once you get a single summary — *"6 repositories behind by 13 commits"* — and a picker, not six popups.
 - Fetches on a configurable interval and when the window regains focus, throttled so the two do not double-fire.
