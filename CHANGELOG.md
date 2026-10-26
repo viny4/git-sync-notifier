@@ -6,6 +6,8 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-10-26
+
 ### Added
 
 - **Stash & Merge.** When git refuses the merge because of uncommitted work,
