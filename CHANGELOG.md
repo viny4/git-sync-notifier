@@ -6,6 +6,24 @@ All notable changes to this extension are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-11-07
+
+### Fixed
+
+- The same notification is no longer raised again at every poll. A range was
+  only recorded as announced once the user answered the toast — but an
+  unanswered toast never resolves, because VS Code moves it to the
+  notification centre and leaves the promise pending. So a notification you
+  left alone was re-announced every few minutes, and merging from one of them
+  left the others on screen still offering a merge already done. The
+  announcement is now recorded when the notification goes up: merging clears
+  it, **Dismiss** replaces it with a permanent record, and any new commit
+  changes the range and comes through regardless.
+- A second summary is no longer raised on top of one already on screen, and
+  repositories queued behind it are kept rather than dropped. A repository
+  that has been merged, or is back in sync, is removed from the queue, so a
+  summary cannot announce a merge that already happened.
+
 ## [0.1.10] — 2026-10-26
 
 ### Added

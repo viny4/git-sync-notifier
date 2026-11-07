@@ -109,7 +109,12 @@ module.exports = async function run() {
     const { recorded, extension, restore } = await activate({
       ws,
       roots,
-      config: { pollIntervalMinutes: 1 }
+      config: { pollIntervalMinutes: 1 },
+      // The toast is never answered. VS Code slides an unanswered notification
+      // into the notification centre and leaves the promise pending — it does
+      // not resolve with undefined — so anything that waits for an answer
+      // before recording the announcement waits forever.
+      answers: { informationMessage: () => new Promise(() => {}) }
     });
     await sleep(140000);
     const toasts = toastsOf(recorded);
