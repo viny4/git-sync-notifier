@@ -70,18 +70,27 @@ export class SummaryNotifier {
 
     // Each new repository extends the wait, but never past maxWaitMs — so a
     // slow repository cannot hold everyone else's notification forever.
+    const remaining = this.maxWaitMs - (Date.now() - this.firstCollectedAt);
+    this.rearm(Math.min(this.quietMs, remaining));
+    return true;
+  }
+
+  private rearm(delayMs: number): void {
     if (this.timer) {
       clearTimeout(this.timer);
     }
-    const remaining = this.maxWaitMs - (Date.now() - this.firstCollectedAt);
-    this.timer = setTimeout(
-      () => {
-        this.timer = undefined;
-        void this.flush();
-      },
-      Math.max(0, Math.min(this.quietMs, remaining))
-    );
-    return true;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush();
+    }, Math.max(0, delayMs));
+  }
+
+  /**
+   * Drops anything queued for a repository that no longer needs announcing —
+   * it was merged, or it is back in sync.
+   */
+  forget(repoRoot: string): void {
+    this.pending.delete(repoRoot);
   }
 
   /**
@@ -89,12 +98,21 @@ export class SummaryNotifier {
    * Below the threshold the queue is released and each repository notifies.
    */
   private async flush(): Promise<void> {
-    const entries = [...this.pending.values()];
-    this.pending.clear();
-
-    if (entries.length === 0) {
+    if (this.pending.size === 0) {
       return;
     }
+
+    // A summary is already on screen. Leave these queued and look again later:
+    // raising a second notification on top of the first is exactly the
+    // duplication this class exists to prevent, and dropping them silently
+    // would lose repositories that really are behind.
+    if (this.showing) {
+      this.rearm(this.quietMs);
+      return;
+    }
+
+    const entries = [...this.pending.values()];
+    this.pending.clear();
 
     if (entries.length < this.threshold) {
       // Not a storm after all — let each repository speak for itself.
@@ -104,9 +122,6 @@ export class SummaryNotifier {
       return;
     }
 
-    if (this.showing) {
-      return;
-    }
     this.showing = true;
     try {
       await this.show(entries);

@@ -157,6 +157,7 @@ class SyncController implements vscode.Disposable {
 
       if (status.behind === 0) {
         this.notifier.setStatus({ kind: 'synced', status });
+        this.summary.forget(this.git.repoRoot);
         await this.state.clear(signatureOf(status));
         if (options.manual) {
           this.notifier.showAlreadyUpToDate(status);
@@ -172,6 +173,17 @@ class SyncController implements vscode.Disposable {
           `[${this.label}] this commit range was already announced — staying quiet.`
         );
         return;
+      }
+
+      // Record the announcement *before* showing it, not after the user
+      // answers. An unanswered toast does not resolve — VS Code moves it to
+      // the notification centre and the promise stays pending — so anything
+      // that waited for an answer left the next poll free to announce the
+      // same range again, and the user collected a stack of identical
+      // notifications. Merging clears this, Dismiss replaces it with a
+      // permanent record, and a new commit changes the signature anyway.
+      if (!options.manual) {
+        await this.state.snooze(signature, UNANSWERED_QUIET_MS);
       }
 
       // Several repositories falling behind at once become one message rather
@@ -217,9 +229,9 @@ class SyncController implements vscode.Disposable {
           await this.state.markDismissed(signature);
           this.logger.info('Dismissed; will alert again on the next new commit.');
         } else {
-          // The toast faded without an answer. Stay quiet for a while rather
-          // than repeating it at every poll.
-          await this.state.snooze(signature, UNANSWERED_QUIET_MS);
+          // Faded or closed without an answer. The quiet period was already
+          // recorded when the notification went up, so there is nothing to do.
+          this.logger.info('Notification closed without an answer.');
         }
         return;
       }
@@ -305,6 +317,9 @@ class SyncController implements vscode.Disposable {
         this.notifier.showMergeSucceeded(status);
       }
 
+      // This repository is no longer behind, so drop anything still queued for
+      // it — otherwise a summary could announce a merge the user just did.
+      this.summary.forget(this.git.repoRoot);
       await this.state.clear(signatureOf(status));
       this.notifier.setStatus({ kind: 'synced', status: { ...status, behind: 0 } });
     } catch (error) {

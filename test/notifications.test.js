@@ -94,6 +94,31 @@ module.exports = async function run() {
     restore();
   }
 
+  section('a repository routed through the summary queue still notifies once');
+  {
+    // Three repositories is the batching threshold, but only one is behind, so
+    // the batch is released and that repository notifies on its own. The
+    // release happens after the check that queued it has already finished, so
+    // nothing was holding the next poll back — this is where the same
+    // notification used to arrive again every minute.
+    const { ws, roots } = buildWorkspace(path.join(root, 'repeat'), [
+      { name: 'web', behind: 2 },
+      { name: 'api' },
+      { name: 'infra' }
+    ]);
+    const { recorded, extension, restore } = await activate({
+      ws,
+      roots,
+      config: { pollIntervalMinutes: 1 }
+    });
+    await sleep(140000);
+    const toasts = toastsOf(recorded);
+    check('announced once across three polls', toasts.length, 1);
+    check('and it is the repository that is behind', toasts[0]?.startsWith('web:'), true);
+    extension.deactivate();
+    restore();
+  }
+
   section('a repository pinned to a commit is not an error');
   {
     const { ws, roots } = buildWorkspace(path.join(root, 'det'), [
